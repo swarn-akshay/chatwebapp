@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Cross-Network P2P Chat</title>
+  <style>
+    body { font-family: Arial; padding:20px; max-width:600px; margin:0 auto; }
+    #chat { border:1px solid #ddd; padding:10px; height:300px; overflow-y:auto; margin:10px 0; }
+    .status { color:#666; font-size:0.9em; }
+    input[type="text"] { width:200px; padding:8px; margin:5px 0; }
+    button { padding:8px 20px; background:#007bff; color:white; border:none; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <h2>Your ID: <span id="myId" class="status">...</span></h2>
+  <div class="status" id="connectionStatus">Disconnected</div>
+  <input type="text" id="remoteId" placeholder="Enter peer's ID">
+  <button onclick="connect()">Connect</button>
+  <div id="chat"></div>
+  <input type="text" id="messageInput" placeholder="Type message">
+  <button onclick="sendMessage()">Send</button>
+
+  <script>
+    // Configuration
+    const WS_SERVER = 'wss://YOUR_NGROK_WS_URL'; // From ngrok (e.g., wss://abcd1234.ngrok.io)
+    const ICE_SERVERS = [
+      { 
+        urls: "turn:global.turn.twilio.com:3478?transport=udp",
+        username: "YOUR_TWILIO_USERNAME", // Get from Twilio
+        credential: "YOUR_TWILIO_CREDENTIAL"
+      }
+    ];
+
+    // Global variables
+    const signalingServer = new WebSocket(WS_SERVER);
+    let peerConnection, dataChannel, myId;
+
+    // WebSocket handlers
+    signalingServer.onmessage = async (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'id') {
+        myId = data.id;
+        document.getElementById('myId').textContent = myId;
+      } else if (data.offer) {
+        await handleOffer(data);
+      } else if (data.answer) {
+        await handleAnswer(data);
+      } else if (data.candidate) {
+        await handleICECandidate(data);
+      }
+    };
+
+    // WebRTC setup
+    async function createPeerConnection() {
+      peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          signalingServer.send(JSON.stringify({
+            targetId: document.getElementById('remoteId').value,
+            candidate: event.candidate
+          }));
+        }
+      };
+
+      peerConnection.onconnectionstatechange = () => {
+        const status = peerConnection.connectionState;
+        document.getElementById('connectionStatus').textContent = status.charAt(0).toUpperCase() + status.slice(1);
+      };
+
+      peerConnection.ondatachannel = (event) => {
+        dataChannel = event.channel;
+        setupDataChannel();
+      };
+    }
+
+    function setupDataChannel() {
+      dataChannel.onopen = () => {
+        document.getElementById('connectionStatus').textContent = "Connected!";
+      };
+      dataChannel.onmessage = (e) => {
+        document.getElementById('chat').innerHTML += `<div>Peer: ${e.data}</div>`;
+      };
+    }
+
+    async function connect() {
+      const targetId = document.getElementById('remoteId').value;
+      if (!targetId) return alert("Enter peer ID!");
+      
+      await createPeerConnection();
+      dataChannel = peerConnection.createDataChannel('chat');
+      setupDataChannel();
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      
+      signalingServer.send(JSON.stringify({
+        targetId: targetId,
+        offer: offer,
+        senderId: myId
+      }));
+    }
+
+    async function handleOffer(data) {
+      await createPeerConnection();
+      await peerConnection.setRemoteDescription(data.offer);
+      
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      
+      signalingServer.send(JSON.stringify({
+        targetId: data.senderId,
+        answer: answer
+      }));
+    }
+
+    async function handleAnswer(data) {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+    }
+
+    async function handleICECandidate(data) {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch (error) {
+        console.error("ICE candidate error:", error);
+      }
+    }
+
+    function sendMessage() {
+      const message = document.getElementById('messageInput').value;
+      if (dataChannel?.readyState === 'open') {
+        dataChannel.send(message);
+        document.getElementById('chat').innerHTML += `<div>You: ${message}</div>`;
+        document.getElementById('messageInput').value = '';
+      }
+    }
+  </script>
+</body>
+</html>

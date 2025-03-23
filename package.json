@@ -1,0 +1,10 @@
+{
+  "name": "p2p-chat-server",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.12.0"
+  }
+}
